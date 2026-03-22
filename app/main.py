@@ -62,7 +62,7 @@ def load_models():
     """
     global model, preprocessor, feature_importance_df, threshold
     
-    models_dir = "../models"
+    models_dir = "./models"
     
     try:
         # Load model
