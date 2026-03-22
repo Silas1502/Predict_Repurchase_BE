@@ -1,0 +1,31 @@
+# Python virtual environment
+venv/
+env/
+ENV/
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Environment variables
+.env
+
+# IDEs
+.vscode/
+.idea/
+
+# Large Data & Models (Chặn file nặng để không bị lỗi Git)
+*.csv
+*.parquet
+*.joblib
+*.h5
+*.pth
+
+# Ngoại lệ: Giữ lại file quan trọng trong folder models (nếu có)
+!models/feature_importance.csv
