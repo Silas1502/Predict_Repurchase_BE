@@ -62,7 +62,7 @@ def load_models():
     """
     global model, preprocessor, feature_importance_df, threshold
     
-    models_dir = "./models"
+    models_dir = "../models"
     
     try:
         # Load model
@@ -169,10 +169,7 @@ app = FastAPI(
 # CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
