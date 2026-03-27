@@ -122,15 +122,10 @@ def load_models():
 
     """
 
-    global model, preprocessor, feature_importance_df, threshold
-
-    
+    global model, preprocessor, feature_importance_df, threshold  
 
     # 1. Xác định vị trí file code đang chạy
-
     current_dir = os.path.dirname(os.path.abspath(__file__))
-
-    
 
     # 2. Xây dựng đường dẫn đến thư mục 'models' nằm cùng cấp với file này
 
