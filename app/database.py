@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 import logging
 
 # Load environment variables
-load_dotenv()
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../.env"))
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -88,7 +88,7 @@ class DatabaseManager:
         Lấy lịch sử giao dịch của một khách hàng từ raw_transactions
         
         Args:
-            customer_id: customer_unique_id cần tìm
+            customer_id: Customer_id cần tìm
             
         Returns:
             List các dict chứa thông tin giao dịch
@@ -102,8 +102,8 @@ class DatabaseManager:
         try:
             result = self.client.table("raw_transactions") \
                 .select("*") \
-                .eq("customer_unique_id", customer_id) \
-                .order("order_purchase_timestamp", desc=False) \
+                .eq("customer_id", customer_id) \
+                .order("order_date", desc=False) \
                 .execute()
             
             return result.data if result.data else []

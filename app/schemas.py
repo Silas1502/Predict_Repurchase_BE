@@ -17,16 +17,17 @@ from decimal import Decimal
 # ==========================================
 
 class TransactionItem(BaseModel):
-    """Một dòng giao dịch (order_item)"""
+    """Một dòng giao dịch (order) cho Online Retail data"""
     order_id: str = Field(..., description="Mã đơn hàng")
-    product_id: str = Field(..., description="Mã sản phẩm")
-    order_purchase_timestamp: str = Field(..., description="Ngày mua (ISO format)")
-    valid_spend_capped: float = Field(..., ge=0, description="Số tiền thanh toán")
-    review_score: float = Field(..., ge=0, le=5, description="Điểm đánh giá 0-5")
-    customer_state: str = Field(..., min_length=2, max_length=2, description="Bang (SP, RJ...)")
-    category_en: str = Field(default="unknown", description="Danh mục sản phẩm")
-    is_total_order: int = Field(..., ge=0, le=1, description="Cờ đơn hàng (0 hoặc 1)")
-    is_valid_order: int = Field(..., ge=0, le=1, description="Cờ hợp lệ (0 hoặc 1)")
+    total_items: int = Field(..., ge=0, description="Tổng số lượng sản phẩm trong đơn")
+    log_items: float = Field(..., description="Logarithm của tổng số lượng sản phẩm")
+    order_date: str = Field(..., description="Ngày mua (ISO format)")
+    order_value: float = Field(..., description="Số tiền thanh toán (bao gồm giá trị âm đối với đơn bị hủy)")
+    canceled_value: float = Field(default=0.0, description="Số tiền bị hủy (0 nếu đơn hàng không bị hủy)")
+    order_n_categories: int = Field(..., ge=0, description="Số danh mục sản phẩm trong đơn")
+    order_n_lines: int = Field(..., ge=0, description="Số dòng sản phẩm trong đơn")
+    is_canceled: int = Field(..., ge=0, le=1, description="Cờ hủy đơn hàng (0 hoặc 1)")
+    country: str = Field(..., description="Tên quốc gia")
 
 
 class PredictRequest(BaseModel):
@@ -35,8 +36,8 @@ class PredictRequest(BaseModel):
         ...,
         description="Thông tin khách hàng",
         example={
-            "customer_unique_id": "CUST_001",
-            "snapshot_date": "2018-09-01"
+            "customer_id": "12345",
+            "snapshot_date": "2010-09-30"
         }
     )
     transactions: List[TransactionItem] = Field(
@@ -48,7 +49,7 @@ class PredictRequest(BaseModel):
     @validator('customer_info')
     def validate_customer_info(cls, v):
         """Validate customer_info có đủ các trường cần thiết"""
-        required_fields = ['customer_unique_id', 'snapshot_date']
+        required_fields = ['customer_id', 'snapshot_date']
         for field in required_fields:
             if field not in v:
                 raise ValueError(f"customer_info thiếu trường: {field}")
@@ -86,7 +87,7 @@ class PredictResponse(BaseModel):
     is_repurchase: bool = Field(..., description="Có khả năng mua lại không")
     potential_level: str = Field(
         ...,
-        description="Mức độ tiềm năng: High/Medium/Low"
+        description="Mức độ tiềm năng: Royal Diamond (Elite) / Diamond (High Potential) / Gold (Mainstream) / Silver (Nurturing) / Standard (Discard)"
     )
     threshold_used: float = Field(
         ...,

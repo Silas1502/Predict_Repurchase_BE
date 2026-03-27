@@ -5,12 +5,11 @@
   
   "success": true,
   "customer_id": "0000366f3b9a7992bf8c76cfdf3221e2",
-  "snapshot_date": "2018-09-01",
-  "probability": 0.1567,
-  "probability_percent": 15.67,
+  "probability": 0.8950,
+  "probability_percent": 89.50,
   "is_repurchase": true,
-  "potential_level": "High",
-  "threshold_used": 0.0806,
+  "potential_level": "Platinum (High)",
+  "threshold_used": 0.85,
   "top_reasons": [
     {
       "feature": "tenure_days",
@@ -18,16 +17,11 @@
       "value": 478.0
     },
     {
-      "feature": "spend_velocity",
-      "importance_percent": 17.40,
-      "value": 2.35
-    },
-    {
-      "feature": "recency_days",
-      "importance_percent": 17.23,
-      "value": 15.0
+      "feature": "sum_L6M_value",
+      "importance_percent": 22.24,
+      "value": 1500.5
     }
   ],
   "prediction_id": "550e8400-e29b-41d4-a716-446655440000",
-  "created_at": "2024-03-22T10:30:00.000000"
+  "created_at": "2026-03-22T23:30:00.000000"
 }
