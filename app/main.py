@@ -104,11 +104,11 @@ preprocessor = None
 
 feature_importance_df = None
 
-threshold = 0.15  # Ngưỡng mặc định từ training
+threshold = None  # Sẽ được load từ optimal_threshold.pkl
 
 MODEL_VERSION = "1.0.0"
 
-MODEL_TYPE = "LightGBM"
+MODEL_TYPE = "XGBoost"
 
 
 
@@ -122,15 +122,15 @@ def load_models():
 
     """
 
-    global model, preprocessor, feature_importance_df, threshold  
+    global model, preprocessor, feature_importance_df, threshold
+
+
 
     # 1. Xác định vị trí file code đang chạy
+
     current_dir = os.path.dirname(os.path.abspath(__file__))
 
     # 2. Xây dựng đường dẫn đến thư mục 'models' nằm cùng cấp với file này
-
-    # Ví dụ: backend/models
-
     models_dir = os.path.join(current_dir, "models")
 
     
@@ -173,7 +173,9 @@ def load_models():
 
                 print(f"   Learning rate: {params.get('learning_rate', 'N/A')}")
 
-                print(f"   Num leaves: {params.get('num_leaves', 'N/A')}")
+                print(f"   Max depth: {params.get('max_depth', 'N/A')}")
+
+                print(f"   Subsample: {params.get('subsample', 'N/A')}")
 
         else:
 
@@ -232,12 +234,7 @@ def load_models():
             print(f"✅ Đã load threshold thành công: {threshold}")
 
         else:
-
-            # Mặc định dùng ngưỡng 0.15 như đã thống nhất trong chiến lược ROI
-
-            threshold = 0.15
-
-            print(f"⚠️ Sử dụng threshold mặc định: {threshold}")
+            raise FileNotFoundError(f"Không tìm thấy file threshold: {threshold_path}. Vui lòng đảm bảo file optimal_threshold.pkl tồn tại.")
 
             
 

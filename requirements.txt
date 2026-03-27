@@ -60,5 +60,6 @@ tzdata==2025.3
 urllib3==2.6.3
 uvicorn==0.42.0
 websockets==15.0.1
+xgboost==3.0.0
 yarl==1.23.0
 zstandard==0.25.0
