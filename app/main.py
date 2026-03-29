@@ -60,7 +60,7 @@ from app.schemas import (
 
 )
 
-from app.preprocess_utils import OnlineRetailPreprocessor, get_top_reasons, load_preprocessor
+from app.preprocess_utils import OnlineRetailPreprocessor, get_top_reasons, get_shap_reasons, load_preprocessor
 
 from app.database import db_manager, init_database, check_db_health, get_db
 
@@ -509,25 +509,30 @@ async def predict(request: PredictRequest):
         print(f"🎯 Raw probability from model: {probability:.4f}")
 
         is_repurchase = bool(probability >= threshold)
-
         potential_level = get_potential_level(probability)
-
         
-
-        # 5. Lấy danh sách lý do ảnh hưởng (Top Reasons)
-
+        # 5. Lấy danh sách lý do ảnh hưởng (Top Reasons) - Dùng SHAP cho từng prediction
         top_reasons_data = []
-
-        if feature_importance_df is not None:
-
-            reasons = get_top_reasons(feature_importance_df, features_df.iloc[0], n=3)
-
-            top_reasons_data = reasons # List các dict
-
+        try:
+            # Thử tính SHAP values cho từng khách hàng
+            shap_reasons = get_shap_reasons(model, features_df, list(features_df.columns), n=3)
+            if shap_reasons:
+                top_reasons_data = shap_reasons
+                print(f" Dùng SHAP values cho top reasons")
+            else:
+                # Fallback về global feature importance nếu SHAP fail
+                if feature_importance_df is not None:
+                    reasons = get_top_reasons(feature_importance_df, features_df.iloc[0], n=3)
+                    top_reasons_data = reasons
+                    print(f" Fallback về global feature importance")
+        except Exception as shap_err:
+            print(f" SHAP error: {shap_err}")
+            # Fallback về global feature importance
+            if feature_importance_df is not None:
+                reasons = get_top_reasons(feature_importance_df, features_df.iloc[0], n=3)
+                top_reasons_data = reasons
         
-
         # 6. LƯU VÀO SUPABASE (Khớp với Schema của bạn)
-
         prediction_id = None
 
         try:
@@ -691,233 +696,142 @@ async def get_customer_history(customer_id: str):
     **Response:**
 
     - Danh sách các giao dịch (order_items) của khách hàng
-
     """
 
     try:
-
         transactions = db_manager.get_customer_transactions(customer_id)
-
         
-
+        # Graceful degradation: nếu DB lỗi, trả về mảng rỗng
+        if transactions is None:
+            transactions = []
+        
         if not transactions:
-
             return CustomerHistoryResponse(
-
                 success=True,
-
                 customer_id=customer_id,
-
                 count=0,
-
                 transactions=[]
-
             )
 
-        
-
         # Chuyển đổi timestamp sang string format
-
         for t in transactions:
-
             if 'order_purchase_timestamp' in t:
-
                 t['order_purchase_timestamp'] = str(t['order_purchase_timestamp'])
-
             if 'created_at' in t:
-
                 t['created_at'] = str(t['created_at'])
-
             if 'id' in t:
-
                 del t['id']  # Xóa internal id
 
-        
-
         return CustomerHistoryResponse(
-
             success=True,
-
             customer_id=customer_id,
-
             count=len(transactions),
-
             transactions=transactions
-
         )
-
-        
 
     except Exception as e:
-
-        raise HTTPException(
-
-            status_code=500,
-
-            detail=f"Lỗi lấy lịch sử: {str(e)}"
-
+        # Graceful degradation: Log lỗi nhưng vẫn trả về response rỗng
+        print(f"⚠️ Lỗi DB khi lấy lịch sử KH {customer_id}: {str(e)}")
+        return CustomerHistoryResponse(
+            success=True,
+            customer_id=customer_id,
+            count=0,
+            transactions=[]
         )
-
-
-
 
 
 @app.get("/applications", response_model=ApplicationsListResponse, tags=["History"])
-
 async def get_applications(
-
     page: int = Query(1, ge=1, description="Số trang"),
-
     page_size: int = Query(20, ge=1, le=100, description="Số records mỗi trang")
-
 ):
-
     """
-
     Lấy lịch sử các lượt dự báo với pagination
 
-    
-
     **Query Parameters:**
-
     - page: Số trang (mặc định 1)
-
     - page_size: Số records mỗi trang (mặc định 20, max 100)
 
-    
-
     **Response:**
-
     - Danh sách các lượt dự báo đã thực hiện
-
     """
 
     try:
-
         result = db_manager.get_predictions_history(page=page, page_size=page_size)
-
         
-
+        # Graceful degradation: nếu DB lỗi, trả về danh sách rỗng
+        if result is None:
+            result = {"count": 0, "data": []}
+        
         # Chuyển đổi data sang schema
-
         applications = []
-
         for item in result.get("data", []):
-
             applications.append(ApplicationLog(
-
                 id=item.get("id"),
-
                 customer_id=item.get("customer_id"),
-
                 probability=item.get("probability"),
-
                 is_repurchase=item.get("is_repurchase"),
-
                 potential_level=item.get("potential_level"),
-
                 created_at=str(item.get("created_at"))
-
             ))
-
         
-
         return ApplicationsListResponse(
-
             success=True,
-
             count=result.get("count", 0),
-
             page=page,
-
             page_size=page_size,
-
             data=applications
-
         )
-
         
-
     except Exception as e:
-
-        raise HTTPException(
-
-            status_code=500,
-
-            detail=f"Lỗi lấy lịch sử: {str(e)}"
-
+        # Graceful degradation: Log lỗi nhưng vẫn trả về response rỗng
+        print(f"⚠️ Lỗi DB khi lấy lịch sử dự báo: {str(e)}")
+        return ApplicationsListResponse(
+            success=True,
+            count=0,
+            page=page,
+            page_size=page_size,
+            data=[]
         )
-
-
-
 
 
 @app.get("/applications/{prediction_id}", tags=["History"])
-
 async def get_application_detail(prediction_id: str):
-
     """
-
     Lấy chi tiết một lượt dự báo (Nâng cao)
 
-    
-
     **Path Parameter:**
-
     - prediction_id: UUID của dự báo
 
-    
-
     **Response:**
-
     - Chi tiết đầy đủ của một lượt dự báo
-
     """
 
     try:
-
         result = db_manager.get_prediction_by_id(prediction_id)
-
         
-
-        if not result:
-
+        # Graceful degradation: nếu DB lỗi
+        if result is None:
             raise HTTPException(
-
                 status_code=404,
-
-                detail=f"Không tìm thấy dự báo với ID: {prediction_id}"
-
+                detail=f"Không tìm thấy dự báo với ID: {prediction_id} (hoặc DB không kết nối được)"
             )
-
         
-
         return {
-
             "success": True,
-
             "data": result
-
         }
-
         
-
     except HTTPException:
-
         raise
-
+        
     except Exception as e:
-
+        # Graceful degradation: Log lỗi và trả về 404 thay vì 500
+        print(f"⚠️ Lỗi DB khi lấy chi tiết dự báo {prediction_id}: {str(e)}")
         raise HTTPException(
-
-            status_code=500,
-
-            detail=f"Lỗi lấy chi tiết: {str(e)}"
-
+            status_code=404,
+            detail=f"Không tìm thấy dự báo với ID: {prediction_id}"
         )
-
-
-
 
 
 @app.get("/model-info", response_model=ModelInfoResponse, tags=["Model"])

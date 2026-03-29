@@ -10,6 +10,7 @@ import pandas as pd
 import numpy as np
 import joblib
 import os
+import shap
 from dateutil.relativedelta import relativedelta
 from typing import List, Dict, Union, Optional
 
@@ -255,6 +256,69 @@ def get_top_reasons(feature_importance_df: pd.DataFrame, feature_values: pd.Seri
         })
     
     return reasons
+
+
+def get_shap_reasons(model, features_df: pd.DataFrame, feature_names: List[str], n: int = 3) -> List[Dict]:
+    """
+    Tính SHAP values cho từng prediction cá nhân.
+    
+    Args:
+        model: Model XGBoost đã train
+        features_df: DataFrame chứa features (1 row cho 1 khách hàng)
+        feature_names: List tên các feature
+        n: Số lý do cần lấy
+    
+    Returns:
+        List các dict chứa feature, importance_percent, value, impact (positive/negative)
+    """
+    try:
+        # Tạo SHAP explainer
+        explainer = shap.TreeExplainer(model)
+        
+        # Tính SHAP values
+        shap_values = explainer.shap_values(features_df.values)
+        
+        # Với XGBoost classifier, shap_values có thể là list (binary classification)
+        if isinstance(shap_values, list):
+            shap_values = shap_values[1]  # Lấy SHAP cho class 1 (mua lại)
+        
+        # Lấy SHAP values cho sample đầu tiên (vì chỉ có 1 khách hàng)
+        shap_for_sample = shap_values[0] if len(shap_values.shape) > 1 else shap_values
+        
+        # Tạo list các (feature_name, shap_value, feature_value)
+        feature_shap = []
+        for i, (fname, sval) in enumerate(zip(feature_names, shap_for_sample)):
+            fval = features_df.iloc[0, i] if i < len(features_df.columns) else 0
+            feature_shap.append({
+                'feature': fname,
+                'shap_value': sval,
+                'value': round(float(fval), 4),
+                'impact': 'positive' if sval > 0 else 'negative'
+            })
+        
+        # Sắp xếp theo absolute SHAP value (mức độ ảnh hưởng)
+        feature_shap.sort(key=lambda x: abs(x['shap_value']), reverse=True)
+        
+        # Tính tổng absolute SHAP để normalize
+        total_abs_shap = sum(abs(x['shap_value']) for x in feature_shap)
+        
+        # Format kết quả
+        reasons = []
+        for item in feature_shap[:n]:
+            importance_pct = round((abs(item['shap_value']) / total_abs_shap) * 100, 2) if total_abs_shap > 0 else 0.0
+            reasons.append({
+                'feature': item['feature'],
+                'importance_percent': importance_pct,
+                'value': item['value'],
+                'impact': item['impact'],
+                'shap_value': round(float(item['shap_value']), 4)
+            })
+        
+        return reasons
+    except Exception as e:
+        print(f"SHAP calculation error: {e}")
+        # Fallback về global feature importance nếu SHAP fail
+        return []
 
 
 def load_preprocessor(path: str = './backend/models/preprocessor.pkl'):
