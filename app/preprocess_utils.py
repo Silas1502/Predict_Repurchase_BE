@@ -10,7 +10,12 @@ import pandas as pd
 import numpy as np
 import joblib
 import os
-import shap
+try:
+    import shap
+    SHAP_AVAILABLE = True
+except ImportError:
+    shap = None
+    SHAP_AVAILABLE = False
 from dateutil.relativedelta import relativedelta
 from typing import List, Dict, Union, Optional
 
@@ -21,16 +26,13 @@ class OnlineRetailPreprocessor:
     Chuyển đổi dữ liệu thô thành 23 features cho model prediction.
     """
     
-    def __init__(self, final_features: List[str] = None):
-        self.final_features = final_features if final_features else [
-            'active_months_L5M', 'avg_L3M_skus', 'avg_L3M_value', 'avg_L5M_skus', 
-            'avg_L5M_value', 'avg_gap_L5M', 'avg_items_per_cat_L3M', 'avg_items_per_cat_L5M',
-            'cancel_rate_L5M', 'cnt_L1M_orders', 'cnt_L3M_orders', 'last_order_intensity',
-            'order_velocity', 'recency_loyalty_score', 'spend_velocity',
-            'std_L3M_value', 'std_L5M_value', 'success_order_rate', 'sum_L1M_value',
-            'sum_L3M_items_log', 'sum_L3M_value', 'sum_L5M_items_log', 'tenure_days'
+    def __init__(self, final_features):
+        self.final_features = final_features
+        self.features_to_remove = [
+            'recency_days',
+            'std_L1M_value', 
+            'global_cancel_val_ratio'
         ]
-        self.features_to_remove = ['recency_days', 'std_L1M_value', 'global_cancel_val_ratio']
 
     def transform(self, transaction: pd.DataFrame, snapshot_base: pd.DataFrame) -> pd.DataFrame:
         df = transaction.copy()
@@ -46,7 +48,12 @@ class OnlineRetailPreprocessor:
             if hist.empty:
                 continue
 
-            # --- TIME WINDOWS ---
+            # --- CHÈN DÒNG KIỂM TRA Ở ĐÂY ---
+            print(f"--- Debug Snapshot: {s_date.date()} ---")
+            print(f"Ngày đơn hàng đầu tiên Class nhận được: {hist['Order_date'].min()}")
+            print(f"Số lượng dòng dữ liệu trong hist: {len(hist)}")
+
+            # TIME WINDOWS
             L1, L3, L5 = [s_date - relativedelta(months=i) for i in [1, 3, 5]]
 
             # --- GEOGRAPHY ---
@@ -75,6 +82,8 @@ class OnlineRetailPreprocessor:
                 f[f'category_diversity_{name}'] = f[f'sum_n_categories_{name}'] / (f[f'cnt_{name}_orders'] + 0.001)
                 f[f'cancel_rate_{name}'] = f[f'cnt_{name}_canceled'] / (f[f'cnt_{name}_orders'] + 0.001)
                 return f
+
+            hist['items_per_cat'] = hist['Order_n_lines'] / (hist['Order_n_categories'] + 0.001)
 
             f1 = agg_rfm_features(hist[hist['Order_date'] > L1], 'L1M')
             f3 = agg_rfm_features(hist[hist['Order_date'] > L3], 'L3M')
@@ -107,36 +116,50 @@ class OnlineRetailPreprocessor:
             history_summary['global_cancel_val_ratio'] = history_summary['total_canceled_val'] / (history_summary['total_gross_val'] + 0.001)
             history_summary['last_order_intensity'] = history_summary['last_order_value'] / (history_summary['global_aov'] + 0.001)
 
-            # --- MERGE ---
+            # MERGE DATA
             feat = snap[['Customer_id', 'snapshot_date']].copy()
-            for df_merge in [f1, f3, f5, rhythm, activity, history_summary, latest_geo]:
+            dfs_to_merge = [f1, f3, f5, rhythm, activity, 
+                            history_summary[['Customer_id', 'tenure_days', 'recency_days', 
+                                              'last_order_intensity', 'last_order_canceled', 
+                                              'global_cancel_val_ratio']], 
+                            latest_geo]
+            
+            for df_merge in dfs_to_merge:
                 if not df_merge.empty:
                     feat = feat.merge(df_merge, on='Customer_id', how='left')
             
-            # Đảm bảo các cột cần thiết tồn tại (nếu thiếu thì tạo với giá trị 0)
-            required_cols = ['sum_L1M_value', 'sum_L3M_value', 'sum_L5M_value',
-                           'cnt_L1M_orders', 'cnt_L3M_orders', 'cnt_L5M_orders',
-                           'avg_L3M_value', 'avg_L5M_value', 'std_L3M_value', 'std_L5M_value',
-                           'avg_L3M_skus', 'avg_L5M_skus', 'sum_L3M_items_log', 'sum_L5M_items_log',
-                           'avg_gap_L5M', 'active_months_L5M', 'tenure_days', 'recency_days',
-                           'last_order_intensity', 'global_cancel_val_ratio', 'cancel_rate_L5M',
-                           'avg_items_per_cat_L3M', 'avg_items_per_cat_L5M', 'Country']
-            for col in required_cols:
-                if col not in feat.columns:
-                    feat[col] = 0
-                    
             result.append(feat)
 
-        modeling_df = pd.concat(result, ignore_index=True).fillna(0)
+        modeling_df = pd.concat(result, ignore_index=True)
+        num_cols = modeling_df.select_dtypes(include=[np.number]).columns
+        modeling_df[num_cols] = modeling_df[num_cols].fillna(0)
 
-        # --- BIẾN TƯƠNG TÁC ---
+        # Đảm bảo các cột cần thiết tồn tại trước khi tính biến tương tác
+        required_base = ['cnt_L5M_orders', 'tenure_days', 'global_cancel_val_ratio',
+                        'recency_days', 'active_months_L5M', 'sum_L1M_value', 
+                        'sum_L3M_value', 'cnt_L1M_orders', 'cnt_L3M_orders']
+        for col in required_base:
+            if col not in modeling_df.columns:
+                modeling_df[col] = 0
+
+        # BIẾN TƯƠNG TÁC (chỉ tính các biến trong final_features)
         modeling_df['order_velocity'] = modeling_df['cnt_L5M_orders'] / (modeling_df['tenure_days'] + 1)
-        modeling_df['success_order_rate'] = 1 - modeling_df.get('global_cancel_val_ratio', 0)
+        modeling_df['success_order_rate'] = 1 - modeling_df['global_cancel_val_ratio']
         modeling_df['recency_loyalty_score'] = modeling_df['recency_days'] * modeling_df['active_months_L5M']
         modeling_df['spend_velocity'] = modeling_df['sum_L1M_value'] / (modeling_df['sum_L3M_value']/3 + 1)
+        # Bỏ order_acceleration vì không có trong FINAL_FEATURES_23
         
-        # Cleanup & Reindex
-        modeling_df = modeling_df.reindex(columns=self.final_features, fill_value=0)
+        modeling_df['is_UK'] = (modeling_df['main_country'] == 'United Kingdom').astype(int)
+        modeling_df = modeling_df.drop(columns=['main_country'])
+
+        # LOẠI BỎ 3 BIẾN TƯƠNG QUAN CAO
+        modeling_df = modeling_df.drop(columns=[f for f in self.features_to_remove if f in modeling_df.columns])
+        
+        # Fill các cột còn thiếu = 0 và trả về đúng thứ tự
+        for f in self.final_features:
+            if f not in modeling_df.columns:
+                modeling_df[f] = 0
+        
         return modeling_df[self.final_features].reset_index(drop=True)
 
     def transform_api_input(self, transactions: List[Dict], customer_id: str, snapshot_date: str) -> pd.DataFrame:
@@ -181,25 +204,6 @@ class OnlineRetailPreprocessor:
         })
         
         return self.transform(df_transactions, snapshot_base)
-
-# ==========================================
-# 🔌 DATABASE ACCESS - Kết nối Supabase
-# ==========================================
-def fetch_full_history_from_supabase(customer_id: str, snapshot_date: str):
-    """
-    Lấy TOÀN BỘ lịch sử đơn hàng của khách hàng từ Supabase 
-    từ lúc bắt đầu đến ngày snapshot để tính Tenure chính xác.
-    """
-    # GIẢ LẬP TRUY VẤN SUPABASE:
-    # response = supabase.table("raw_transactions") \
-    #     .select("*") \
-    #     .eq("Customer_id", customer_id) \
-    #     .lte("Order_date", snapshot_date) \
-    #     .execute()
-    # return response.data
-    
-    # Ở đây tôi giả lập trả về List Dict để bạn dễ hình dung:
-    return [] 
 
 
 # ==========================================
@@ -271,6 +275,10 @@ def get_shap_reasons(model, features_df: pd.DataFrame, feature_names: List[str],
     Returns:
         List các dict chứa feature, importance_percent, value, impact (positive/negative)
     """
+    if not SHAP_AVAILABLE:
+        print("SHAP not available, returning empty list")
+        return []
+    
     try:
         # Tạo SHAP explainer
         explainer = shap.TreeExplainer(model)
