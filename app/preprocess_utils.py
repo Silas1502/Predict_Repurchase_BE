@@ -29,8 +29,6 @@ class OnlineRetailPreprocessor:
     def __init__(self, final_features):
         self.final_features = final_features
         self.features_to_remove = [
-            'recency_days',
-            'std_L1M_value', 
             'global_cancel_val_ratio'
         ]
 
@@ -48,16 +46,8 @@ class OnlineRetailPreprocessor:
             if hist.empty:
                 continue
 
-            # --- CHÈN DÒNG KIỂM TRA Ở ĐÂY ---
-            print(f"--- Debug Snapshot: {s_date.date()} ---")
-            print(f"Ngày đơn hàng đầu tiên Class nhận được: {hist['Order_date'].min()}")
-            print(f"Số lượng dòng dữ liệu trong hist: {len(hist)}")
-
             # TIME WINDOWS
             L1, L3, L5 = [s_date - relativedelta(months=i) for i in [1, 3, 5]]
-
-            # --- GEOGRAPHY ---
-            latest_geo = hist.sort_values('Order_date').groupby('Customer_id')['Country'].last().reset_index(name='main_country')
 
             # --- AGGREGATION FUNCTION ---
             def agg_rfm_features(sub_df, name):
@@ -74,13 +64,13 @@ class OnlineRetailPreprocessor:
                     f'avg_{name}_skus': ('Order_n_lines', 'mean'),
                     f'sum_{name}_items_log': ('Log_items', 'sum'),
                     f'avg_{name}_items_log': ('Log_items', 'mean'),
-                    f'cnt_{name}_canceled': ('Is_canceled', 'sum'),
+                    f'sum_{name}_canceled': ('Is_canceled', 'sum'),
                     f'avg_n_categories_{name}': ('Order_n_categories', 'mean'),
                     f'sum_n_categories_{name}': ('Order_n_categories', 'sum'),
                     f'avg_items_per_cat_{name}': ('items_per_cat', 'mean')
                 }).reset_index()
                 f[f'category_diversity_{name}'] = f[f'sum_n_categories_{name}'] / (f[f'cnt_{name}_orders'] + 0.001)
-                f[f'cancel_rate_{name}'] = f[f'cnt_{name}_canceled'] / (f[f'cnt_{name}_orders'] + 0.001)
+                f[f'cancel_rate_{name}'] = f[f'sum_{name}_canceled'] / (f[f'cnt_{name}_orders'] + 0.001)
                 return f
 
             hist['items_per_cat'] = hist['Order_n_lines'] / (hist['Order_n_categories'] + 0.001)
@@ -121,8 +111,7 @@ class OnlineRetailPreprocessor:
             dfs_to_merge = [f1, f3, f5, rhythm, activity, 
                             history_summary[['Customer_id', 'tenure_days', 'recency_days', 
                                               'last_order_intensity', 'last_order_canceled', 
-                                              'global_cancel_val_ratio']], 
-                            latest_geo]
+                                              'global_cancel_val_ratio']]]
             
             for df_merge in dfs_to_merge:
                 if not df_merge.empty:
@@ -136,23 +125,21 @@ class OnlineRetailPreprocessor:
 
         # Đảm bảo các cột cần thiết tồn tại trước khi tính biến tương tác
         required_base = ['cnt_L5M_orders', 'tenure_days', 'global_cancel_val_ratio',
-                        'recency_days', 'active_months_L5M', 'sum_L1M_value', 
-                        'sum_L3M_value', 'cnt_L1M_orders', 'cnt_L3M_orders']
+                        'sum_L1M_value', 'sum_L3M_value']
         for col in required_base:
             if col not in modeling_df.columns:
                 modeling_df[col] = 0
 
-        # BIẾN TƯƠNG TÁC (chỉ tính các biến trong final_features)
-        modeling_df['order_velocity'] = modeling_df['cnt_L5M_orders'] / (modeling_df['tenure_days'] + 1)
+        # BIẾN TƯƠNG TÁC (chỉ tính 3 biến tương tác trong FINAL_FEATURES_23)
+        modeling_df['order_velocity'] = modeling_df['cnt_L5M_orders'] / 5
         modeling_df['success_order_rate'] = 1 - modeling_df['global_cancel_val_ratio']
-        modeling_df['recency_loyalty_score'] = modeling_df['recency_days'] * modeling_df['active_months_L5M']
-        modeling_df['spend_velocity'] = modeling_df['sum_L1M_value'] / (modeling_df['sum_L3M_value']/3 + 1)
-        # Bỏ order_acceleration vì không có trong FINAL_FEATURES_23
-        
-        modeling_df['is_UK'] = (modeling_df['main_country'] == 'United Kingdom').astype(int)
-        modeling_df = modeling_df.drop(columns=['main_country'])
+        modeling_df['spend_velocity'] = np.where(
+            modeling_df['sum_L3M_value'] > 0,
+            modeling_df['sum_L1M_value'] / (modeling_df['sum_L3M_value'] / 3),
+            0
+        )
 
-        # LOẠI BỎ 3 BIẾN TƯƠNG QUAN CAO
+        # LOẠI BỎ BIẾN TRUNG GIAN (theo feature selection)
         modeling_df = modeling_df.drop(columns=[f for f in self.features_to_remove if f in modeling_df.columns])
         
         # Fill các cột còn thiếu = 0 và trả về đúng thứ tự
