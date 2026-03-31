@@ -34,11 +34,28 @@ class OnlineRetailPreprocessor:
 
     def transform(self, transaction: pd.DataFrame, snapshot_base: pd.DataFrame) -> pd.DataFrame:
         df = transaction.copy()
-        df['Order_date'] = pd.to_datetime(df['Order_date'])
+        df['Order_date'] = pd.to_datetime(df['Order_date'], errors='coerce')
+        
+        # Bỏ timezone nếu có để tránh lỗi so sánh
+        if df['Order_date'].dt.tz is not None:
+            df['Order_date'] = df['Order_date'].dt.tz_localize(None)
+        
+        # Kiểm tra nếu có giá trị ngày không hợp lệ
+        if df['Order_date'].isna().any():
+            invalid_dates = df[df['Order_date'].isna()]
+            raise ValueError(f"Order_date chứa giá trị không hợp lệ: {invalid_dates[['Order_id', 'Order_date']].head().to_dict()}")
+        
         result = []
 
         for s_date in snapshot_base['snapshot_date'].unique():
-            s_date = pd.to_datetime(s_date)
+            s_date = pd.to_datetime(s_date, errors='coerce')
+            if pd.isna(s_date):
+                raise ValueError(f"snapshot_date không hợp lệ: {s_date}")
+            
+            # Bỏ timezone nếu có
+            if hasattr(s_date, 'tz') and s_date.tz is not None:
+                s_date = s_date.tz_localize(None)
+                
             snap = snapshot_base[snapshot_base['snapshot_date'] == s_date].copy()
             
             # hist: Lấy toàn bộ lịch sử có trong DataFrame truyền vào cho đến ngày snapshot
@@ -48,6 +65,14 @@ class OnlineRetailPreprocessor:
 
             # TIME WINDOWS
             L1, L3, L5 = [s_date - relativedelta(months=i) for i in [1, 3, 5]]
+
+            # GEOGRAPHY
+            latest_geo = (
+                hist.sort_values('Order_date')
+                .groupby('Customer_id')['Country']
+                .last()
+                .reset_index(name='main_country')
+            )
 
             # --- AGGREGATION FUNCTION ---
             def agg_rfm_features(sub_df, name):
@@ -71,6 +96,8 @@ class OnlineRetailPreprocessor:
                 }).reset_index()
                 f[f'category_diversity_{name}'] = f[f'sum_n_categories_{name}'] / (f[f'cnt_{name}_orders'] + 0.001)
                 f[f'cancel_rate_{name}'] = f[f'sum_{name}_canceled'] / (f[f'cnt_{name}_orders'] + 0.001)
+                # Fill NaN cho std (khi chỉ có 1 order -> std = NaN)
+                f[f'std_{name}_value'] = f[f'std_{name}_value'].fillna(0)
                 return f
 
             hist['items_per_cat'] = hist['Order_n_lines'] / (hist['Order_n_categories'] + 0.001)
@@ -111,7 +138,8 @@ class OnlineRetailPreprocessor:
             dfs_to_merge = [f1, f3, f5, rhythm, activity, 
                             history_summary[['Customer_id', 'tenure_days', 'recency_days', 
                                               'last_order_intensity', 'last_order_canceled', 
-                                              'global_cancel_val_ratio']]]
+                                              'global_cancel_val_ratio']],
+                            latest_geo]
             
             for df_merge in dfs_to_merge:
                 if not df_merge.empty:
@@ -124,20 +152,25 @@ class OnlineRetailPreprocessor:
         modeling_df[num_cols] = modeling_df[num_cols].fillna(0)
 
         # Đảm bảo các cột cần thiết tồn tại trước khi tính biến tương tác
-        required_base = ['cnt_L5M_orders', 'tenure_days', 'global_cancel_val_ratio',
-                        'sum_L1M_value', 'sum_L3M_value']
-        for col in required_base:
+        required_cols = ['cnt_L5M_orders', 'tenure_days', 'global_cancel_val_ratio',
+                        'recency_days', 'active_months_L5M', 'sum_L1M_value', 'sum_L3M_value', 
+                        'std_L1M_value', 'std_L3M_value', 'cnt_L1M_orders', 'cnt_L3M_orders']
+        for col in required_cols:
             if col not in modeling_df.columns:
                 modeling_df[col] = 0
 
-        # BIẾN TƯƠNG TÁC (chỉ tính 3 biến tương tác trong FINAL_FEATURES_23)
+        # BIẾN TƯƠNG TÁC (khớp hoàn toàn với build_online_retail_features)
         modeling_df['order_velocity'] = modeling_df['cnt_L5M_orders'] / 5
         modeling_df['success_order_rate'] = 1 - modeling_df['global_cancel_val_ratio']
+        modeling_df['recency_loyalty_score'] = modeling_df['recency_days'] * modeling_df['active_months_L5M']
         modeling_df['spend_velocity'] = np.where(
             modeling_df['sum_L3M_value'] > 0,
             modeling_df['sum_L1M_value'] / (modeling_df['sum_L3M_value'] / 3),
             0
         )
+        
+        # Drop main_country nếu có
+        modeling_df = modeling_df.drop(columns=['main_country'], errors='ignore')
 
         # LOẠI BỎ BIẾN TRUNG GIAN (theo feature selection)
         modeling_df = modeling_df.drop(columns=[f for f in self.features_to_remove if f in modeling_df.columns])
@@ -184,10 +217,14 @@ class OnlineRetailPreprocessor:
         # Add Customer_id
         df_transactions['Customer_id'] = customer_id
         
-        # Create snapshot_base
+        # Create snapshot_base với xử lý lỗi
+        snapshot_date_parsed = pd.to_datetime(snapshot_date, errors='coerce')
+        if pd.isna(snapshot_date_parsed):
+            raise ValueError(f"snapshot_date không hợp lệ: {snapshot_date}")
+        
         snapshot_base = pd.DataFrame({
             'Customer_id': [customer_id],
-            'snapshot_date': [pd.to_datetime(snapshot_date)]
+            'snapshot_date': [snapshot_date_parsed]
         })
         
         return self.transform(df_transactions, snapshot_base)
@@ -196,21 +233,22 @@ class OnlineRetailPreprocessor:
 # ==========================================
 # 🛠️ HELPER FUNCTIONS
 # ==========================================
+# Nếu shap không chạy được thì dùng global feature importance từ model
 def get_top_reasons(feature_importance_df: pd.DataFrame, feature_values: pd.Series, n: int = 3) -> List[Dict]:
     """
     Lấy top n lý do ảnh hưởng đến kết quả dự đoán.
-    
+        
     Args:
         feature_importance_df: DataFrame chứa feature importance với cột 'Feature' và 'Importance'
         feature_values: Series chứa giá trị các feature
         n: Số lý do cần lấy
     
     Returns:
-        List các dict chứa feature, importance_percent, value
+        List các dict chứa feature, importance_percent, value, impact
     """
     if feature_importance_df is None or feature_importance_df.empty:
         return []
-    
+        
     # Đảm bảo có cột 'Feature' và 'Importance' (chữ hoa như trong CSV)
     if 'Feature' not in feature_importance_df.columns or 'Importance' not in feature_importance_df.columns:
         # Thử kiểm tra tên cột chữ thường
@@ -222,36 +260,59 @@ def get_top_reasons(feature_importance_df: pd.DataFrame, feature_values: pd.Seri
     else:
         feature_col = 'Feature'
         importance_col = 'Importance'
-    
+        
     # Sort by importance
     sorted_fi = feature_importance_df.sort_values(importance_col, ascending=False)
-    
+        
     # Calculate total importance
     total_importance = sorted_fi[importance_col].sum()
-    
+        
+    # Danh sách features có tác động tích cực (càng cao càng tốt)
+    positive_features = [
+        'active_months_L5M', 'sum_L1M_value', 'sum_L3M_value', 'sum_L5M_value',
+        'cnt_L1M_orders', 'cnt_L3M_orders', 'tenure_days', 'success_order_rate',
+        'spend_velocity', 'order_velocity', 'sum_L5M_items_log', 'avg_L5M_items_log'
+    ]
+        
+    # Danh sách features có tác động tiêu cực (càng cao càng xấu)
+    negative_features = [
+        'recency_days', 'cancel_rate_L5M', 'avg_gap_L5M', 'std_L1M_value', 'std_L3M_value'
+    ]
+        
     reasons = []
     for _, row in sorted_fi.head(n).iterrows():
         feature_name = row[feature_col]
         importance = row[importance_col]
-        
+            
         # Get feature value
         if feature_name in feature_values.index:
             value = feature_values[feature_name]
         else:
             value = 0.0
-        
+            
+        # Xác định impact dựa trên loại feature và giá trị
+        if feature_name in positive_features:
+            impact = 'positive' if value > 0 else 'negative'
+        elif feature_name in negative_features:
+            impact = 'negative' if value > 0 else 'positive'
+        else:
+            # Mặc định: nếu giá trị cao thì tích cực
+            impact = 'positive' if value > 0 else 'neutral'
+            
         reasons.append({
             'feature': feature_name,
             'importance_percent': round((importance / total_importance) * 100, 2) if total_importance > 0 else 0.0,
-            'value': round(float(value), 4)
+            'value': round(float(value), 4),
+            'impact': impact
         })
-    
+        
     return reasons
 
-
+# Lấy SHAP values cho từng prediction cá nhân
 def get_shap_reasons(model, features_df: pd.DataFrame, feature_names: List[str], n: int = 3) -> List[Dict]:
     """
     Tính SHAP values cho từng prediction cá nhân.
+        
     
     Args:
         model: Model XGBoost đã train
@@ -334,3 +395,19 @@ def load_preprocessor(path: str = './backend/models/preprocessor.pkl'):
 def load_retail_preprocessor(path: str = './backend/models/preprocessor.pkl'):
     """Alias cho load_preprocessor"""
     return load_preprocessor(path)
+
+
+# ==========================================
+# 🎯 FINAL FEATURES CONFIG
+# ==========================================
+
+# 23 features sau khi loại 2 biến tương quan cao (đúng như model đã train)
+FINAL_FEATURES_23 = [
+    'active_months_L5M', 'avg_L1M_value', 'avg_L3M_items_log', 
+    'avg_L3M_skus', 'avg_L5M_items_log', 'avg_L5M_value', 'avg_gap_L5M',
+    'avg_items_per_cat_L3M', 'avg_items_per_cat_L5M', 'cancel_rate_L5M', 
+    'cnt_L1M_orders', 'cnt_L3M_orders', 'last_order_intensity', 
+    'recency_days', 'spend_velocity', 'std_L1M_value', 'std_L3M_value', 
+    'success_order_rate', 'sum_L1M_value', 'sum_L3M_items_log', 'sum_L3M_value', 
+    'sum_L5M_items_log', 'tenure_days'
+]

@@ -65,6 +65,7 @@ class TopReason(BaseModel):
     feature: str = Field(..., description="Tên feature")
     importance_percent: float = Field(..., description="Tầm quan trọng %")
     value: float = Field(..., description="Giá trị của feature")
+    impact: Optional[str] = Field(None, description="Tác động: positive (tích cực) hoặc negative (tiêu cực)")
 
 
 class PredictResponse(BaseModel):
