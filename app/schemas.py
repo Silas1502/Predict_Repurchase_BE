@@ -19,7 +19,7 @@ from decimal import Decimal
 class TransactionItem(BaseModel):
     """Một dòng giao dịch (order) cho Online Retail data"""
     order_id: str = Field(..., description="Mã đơn hàng")
-    total_items: int = Field(..., ge=0, description="Tổng số lượng sản phẩm trong đơn")
+    total_items: int = Field(..., description="Tổng số lượng sản phẩm trong đơn (có thể âm nếu là đơn hủy)")
     log_items: float = Field(..., description="Logarithm của tổng số lượng sản phẩm")
     order_date: str = Field(..., description="Ngày mua (ISO format)")
     order_value: float = Field(..., description="Số tiền thanh toán (bao gồm giá trị âm đối với đơn bị hủy)")
