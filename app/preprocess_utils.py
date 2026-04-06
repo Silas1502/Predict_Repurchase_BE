@@ -372,29 +372,13 @@ def load_retail_preprocessor(path: str = './backend/models/preprocessor.pkl'):
 # 🎯 FINAL FEATURES CONFIG
 # ==========================================
 
-# 22 features sau feature selection
-FINAL_FEATURES_22 = [
-    'active_months_L5M', 'avg_L1M_value', 'avg_L3M_value', 'avg_L5M_items_log',
-    'avg_L5M_skus', 'avg_L5M_value', 'avg_gap_L5M', 'avg_items_per_cat_L3M',
-    'avg_items_per_cat_L5M', 'cancel_rate_L5M', 'cnt_L1M_orders', 'cnt_L3M_orders',
-    'cv_L5M_value', 'global_cancel_val_ratio', 'recency_days', 'spend_velocity',
-    'std_L1M_value', 'std_L3M_value', 'sum_L1M_items_log', 'sum_L1M_value',
-    'sum_L3M_items_log', 'sum_L3M_value', 'tenure_days'
+# 23 features sau khi loại 2 biến tương quan cao (đúng như model đã train)
+FINAL_FEATURES_23 = [
+    'active_months_L5M', 'avg_L1M_value', 'avg_L3M_items_log', 
+    'avg_L3M_skus', 'avg_L5M_items_log', 'avg_L5M_value', 'avg_gap_L5M',
+    'avg_items_per_cat_L3M', 'avg_items_per_cat_L5M', 'cancel_rate_L5M', 
+    'cnt_L1M_orders', 'cnt_L3M_orders', 'last_order_intensity', 
+    'recency_days', 'spend_velocity', 'std_L1M_value', 'std_L3M_value', 
+    'success_order_rate', 'sum_L1M_value', 'sum_L3M_items_log', 'sum_L3M_value', 
+    'sum_L5M_items_log', 'tenure_days'
 ]
-
-# Scaler params từ training (output từ build_online_retail_features)
-SCALER_PARAMS = {
-    'r_median': 29.0,
-    'r_scale': 54.0,
-    'f_median': 3.0,
-    'f_scale': 3.0,
-    'm_median': 783.67,
-    'm_scale': 1134.1575
-}
-
-# Khởi tạo và save preprocessor
-preprocessor = OnlineRetailPreprocessor(final_features=FINAL_FEATURES_22, scaler_params=SCALER_PARAMS)
-os.makedirs('./backend/models', exist_ok=True)
-joblib.dump(preprocessor, './backend/models/preprocessor.pkl')
-
-print(f"🚀 Preprocessor sẵn sàng với {len(FINAL_FEATURES_22)} features!")
